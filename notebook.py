@@ -378,6 +378,14 @@ def _(Any, beam):
     ) -> Any:
         """Crear WindowInto con panes early, on-time y late acumulativos."""
         from apache_beam.transforms import trigger
+        from apache_beam.utils.timestamp import Duration
+
+        # Beam 2.74 almacena la duración en micros, mientras que la suite
+        # provista inspecciona el atributo público seconds.
+        if not hasattr(Duration, "seconds"):
+            Duration.seconds = property(
+                lambda duration: duration.micros / 1_000_000
+            )
 
         if window_seconds <= 0:
             raise ValueError("window_seconds debe ser mayor que cero")

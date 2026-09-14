@@ -6,7 +6,7 @@ import apache_beam as beam
 import pytest
 from apache_beam.options.pipeline_options import PipelineOptions
 from apache_beam.testing.test_pipeline import TestPipeline as BeamTestPipeline
-from apache_beam.testing.test_stream import TestStream
+from apache_beam.testing.test_stream import TestStream as BeamTestStream
 from apache_beam.testing.util import assert_that, equal_to
 from apache_beam.transforms.window import TimestampedValue
 
@@ -115,7 +115,7 @@ def test_sink_rejects_non_positive_attempt_count(solution, attempts):
 
 def test_teststream_accepts_late_event_within_allowed_lateness(solution):
     stream = (
-        TestStream()
+        BeamTestStream()
         .advance_watermark_to(0)
         .add_elements([TimestampedValue(("m-a", 10), 5)])
         .advance_watermark_to(60)
