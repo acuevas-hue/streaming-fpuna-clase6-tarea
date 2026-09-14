@@ -41,7 +41,6 @@ def _(mo):
 
     **Ventanas, estado por clave y efectos externos idempotentes**
 
-    Este notebook contiene una solución ejecutable y documentada de la tarea.
     Este notebook contiene una implementación completa y reproducible del
     pipeline. Las decisiones principales se muestran junto con evidencia
     ejecutable sobre el dataset provisto.
@@ -74,18 +73,6 @@ def _(mo):
 @app.cell
 def _(datetime):
     def parse_utc(raw_value: str) -> datetime:
-        """Convertir un timestamp ISO-8601 terminado en Z a datetime UTC."""
-        if not isinstance(raw_value, str) or not raw_value.endswith("Z"):
-            raise ValueError("el timestamp debe ser un string ISO-8601 terminado en Z")
-
-        try:
-            parsed = datetime.fromisoformat(f"{raw_value[:-1]}+00:00")
-        except ValueError as error:
-            raise ValueError(f"timestamp UTC inválido: {raw_value!r}") from error
-
-        if parsed.tzinfo is None:
-            raise ValueError("el timestamp debe incluir información de zona horaria")
-        return parsed
         """Convertir un timestamp ISO-8601 a un datetime UTC timezone-aware."""
         from datetime import UTC
 
@@ -111,7 +98,7 @@ def _(mo):
     mo.md(r"""
     ## 1. Tiempo de evento
 
-    `parse_utc` aplica el siguiente contrato:
+    Completá `parse_utc`.
 
     El resultado debe:
 
@@ -130,15 +117,6 @@ def _(datetime):
         timestamp: datetime,
         size_seconds: int = 60,
     ) -> tuple[datetime, datetime]:
-        """Retornar los límites [inicio, fin) de la ventana fija."""
-        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-            raise ValueError("timestamp debe ser timezone-aware")
-        if size_seconds <= 0:
-            raise ValueError("size_seconds debe ser mayor que cero")
-
-        start_epoch = int(timestamp.timestamp()) // size_seconds * size_seconds
-        start = datetime.fromtimestamp(start_epoch, tz=timestamp.tzinfo)
-        end = datetime.fromtimestamp(start_epoch + size_seconds, tz=timestamp.tzinfo)
         """Retornar los límites UTC [inicio, fin) de una ventana fija."""
         from datetime import UTC
 
@@ -190,36 +168,6 @@ def _(Any, Iterable, assign_fixed_window, parse_utc):
             raise ValueError("allowed_lateness_seconds no puede ser negativo")
 
         totals_by_window: dict[tuple[str, str, str], int] = {}
-        audit: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
-
-        for event in events:
-            event_time = parse_utc(event["event_time"])
-            arrival_time = parse_utc(event["arrival_time"])
-            window_start, window_end = assign_fixed_window(event_time, window_seconds)
-            delay_seconds = (arrival_time - event_time).total_seconds()
-            identity = (event["merchant_id"], event["event_id"])
-            duplicate = deduplicate and identity in seen
-            too_late = delay_seconds > allowed_lateness_seconds
-            confirmed = event.get("status") == "CONFIRMED"
-
-            accepted = confirmed and not duplicate and not too_late
-            if accepted:
-                seen.add(identity)
-            if duplicate:
-                reason = "duplicate"
-            elif too_late:
-                reason = "too_late"
-            elif not confirmed:
-                reason = "not_confirmed"
-            else:
-                reason = "accepted"
-
-            revision = accepted and arrival_time >= window_end
-            audit.append(
-                {
-                    "event_id": event["event_id"],
-                    "merchant_id": event["merchant_id"],
         seen_by_window: dict[tuple[str, str, str], set[str]] = {}
         audit: list[dict[str, Any]] = []
 
@@ -276,16 +224,6 @@ def _(Any, Iterable, assign_fixed_window, parse_utc):
                 }
             )
 
-            if accepted:
-                window_key = (
-                    event["merchant_id"],
-                    window_start.isoformat(),
-                    window_end.isoformat(),
-                )
-                totals_by_window[window_key] = (
-                    totals_by_window.get(window_key, 0) + event["amount"]
-                )
-
         totals = [
             {
                 "merchant_id": merchant_id,
@@ -307,7 +245,7 @@ def _(mo):
     mo.md(r"""
     ## 2. Contrato determinista antes de Beam
 
-    `assign_fixed_window` y `summarize_payments` forman el oráculo determinista.
+    Implementá `assign_fixed_window` y `summarize_payments`.
 
     Esta versión pura de Python funciona como oráculo para el pipeline:
 
@@ -319,8 +257,8 @@ def _(mo):
     - un late aceptado tiene `accepted=True` y `revision=True`;
     - un evento fuera de tolerancia tiene `reason="too_late"`.
 
-    Para la configuración por defecto entran **9 eventos**, se aceptan **5** y
-    se producen **4 totales**.
+    Para la configuración por defecto, documentá cuántos eventos entran,
+    cuántos se aceptan y cuántos totales se producen.
     """)
     return
 
@@ -346,22 +284,6 @@ def _(Any, DeduplicatePayments, beam, parse_utc):
                 event_time.timestamp(),
             )
 
-        Usar Create, TimestampedValue, Filter, WindowInto, una clave por
-        comercio, CombinePerKey y metadatos de WindowParam.
-        """
-        if window_seconds <= 0:
-            raise ValueError("window_seconds debe ser mayor que cero")
-
-        def with_event_timestamp(event):
-            timestamp = parse_utc(event["event_time"]).timestamp()
-            return beam.window.TimestampedValue(event, timestamp)
-
-        def format_total(item, window=beam.DoFn.WindowParam):
-            merchant_id, total = item
-            return {
-                "merchant_id": merchant_id,
-                "window_start": f"{window.start.to_utc_datetime().isoformat()}+00:00",
-                "window_end": f"{window.end.to_utc_datetime().isoformat()}+00:00",
         def format_result(item, window=beam.DoFn.WindowParam):
             merchant_id, total = item
             return {
@@ -377,16 +299,6 @@ def _(Any, DeduplicatePayments, beam, parse_utc):
 
         return (
             pipeline
-            | "Create payments" >> beam.Create(events)
-            | "Use event timestamps" >> beam.Map(with_event_timestamp)
-            | "Keep confirmed" >> beam.Filter(lambda event: event["status"] == "CONFIRMED")
-            | "Fixed event-time windows"
-            >> beam.WindowInto(beam.window.FixedWindows(window_seconds))
-            | "Key by merchant" >> beam.Map(lambda event: (event["merchant_id"], event))
-            | "Deduplicate event ids" >> beam.ParDo(DeduplicatePayments())
-            | "Extract amounts" >> beam.Map(lambda item: (item[0], item[1]["amount"]))
-            | "Sum each merchant window" >> beam.CombinePerKey(sum)
-            | "Attach window metadata" >> beam.Map(format_total)
             | "Crear pagos" >> beam.Create(events)
             | "Asignar event time" >> beam.Map(with_event_timestamp)
             | "Filtrar confirmados"
@@ -437,9 +349,6 @@ def _(
             expiry=beam.DoFn.TimerParam(EXPIRY),
         ):
             """Emitir el elemento completo solo en su primera aparición."""
-            merchant_id, event = element
-            event_id = event["event_id"]
-            if event_id in seen_ids.read():
             _, event = element
             event_id = event["event_id"]
             if not isinstance(event_id, str):
@@ -450,11 +359,6 @@ def _(
 
             seen_ids.add(event_id)
             expiry.set(window.end + self.allowed_lateness_seconds)
-            yield merchant_id, event
-
-        @on_timer(EXPIRY)
-        def expire(self, seen_ids=beam.DoFn.StateParam(SEEN_IDS)):
-            """Limpiar el estado cuando vence el timer de event time."""
             yield element
 
         @on_timer(EXPIRY)
@@ -483,26 +387,6 @@ def _(Any, beam):
                 lambda duration: duration.micros / 1_000_000
             )
 
-        Configurar un pane on-time por watermark, una estimación early por
-        processing time, revisiones late y modo ACCUMULATING.
-        """
-        if window_seconds <= 0 or allowed_lateness_seconds < 0:
-            raise ValueError("la ventana debe ser positiva y el atraso no negativo")
-
-        policy = beam.WindowInto(
-            beam.window.FixedWindows(window_seconds),
-            trigger=beam.trigger.AfterWatermark(
-                early=beam.trigger.AfterProcessingTime(30),
-                late=beam.trigger.AfterCount(1),
-            ),
-            accumulation_mode=beam.trigger.AccumulationMode.ACCUMULATING,
-            allowed_lateness=allowed_lateness_seconds,
-        )
-        # Beam 2.74 expone microsegundos en Duration; estos aliases conservan
-        # una inspección legible en segundos para el notebook y su rúbrica.
-        policy.windowing.windowfn.size.seconds = window_seconds
-        policy.windowing.allowed_lateness.seconds = allowed_lateness_seconds
-        return policy
         if window_seconds <= 0:
             raise ValueError("window_seconds debe ser mayor que cero")
         if allowed_lateness_seconds < 0:
@@ -528,7 +412,7 @@ def _(mo):
     mo.md(r"""
     ## 3. Pipeline Beam, estado y triggers
 
-    La solución implementa:
+    Completá:
 
     - `build_windowed_totals_pipeline`;
     - `DeduplicatePayments.process`;
@@ -537,15 +421,14 @@ def _(mo):
     La clave debe ser `merchant_id` antes de usar estado. La salida debe
     recuperar los límites de ventana con `WindowParam`.
 
-    Las pruebas provistas ejercitan el pipeline con `TestPipeline`; el oráculo
-    temporal evidencia tanto una revisión late aceptada como el descarte de un
-    evento que supera la tolerancia.
+    Agregá pruebas con `TestPipeline` y al menos una prueba temporal con
+    `TestStream` que evidencie un resultado late aceptado.
 
     ### Expiración
 
-    La deduplicación programa un timer de event time al finalizar la ventana
-    más la lateness permitida. Sin expiración, los identificadores históricos
-    quedarían retenidos y el estado crecería indefinidamente.
+    Extendé la deduplicación con un timer de event time que limpie el estado
+    al finalizar la ventana más la lateness permitida. Explicá por qué un
+    estado sin expiración crece indefinidamente.
     """)
     return
 
@@ -554,7 +437,6 @@ def _(mo):
 def _(Any):
     def make_idempotency_key(result: dict[str, Any]) -> str:
         """Construir merchant_id|window_start para un resultado lógico."""
-        return f'{result["merchant_id"]}|{result["window_start"]}'
         return str(result["merchant_id"]) + "|" + str(result["window_start"])
 
     def simulate_sink_retries(
@@ -563,13 +445,6 @@ def _(Any):
         attempts: int = 2,
         idempotent: bool = True,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Simular intentos de escritura y retornar `(materialized, audit)`.
-
-        En modo idempotente, múltiples intentos del mismo resultado deben dejar
-        una sola fila materializada. En modo append, cada intento agrega una.
-        """
-        if attempts < 1:
-            raise ValueError("attempts debe ser al menos uno")
         """Simular reintentos de POST o UPSERT y retornar estado y auditoría."""
         if isinstance(attempts, bool) or not isinstance(attempts, int):
             raise TypeError("attempts debe ser un entero")
@@ -579,12 +454,6 @@ def _(Any):
         append_sink: list[dict[str, Any]] = []
         upsert_sink: dict[str, dict[str, Any]] = {}
         audit: list[dict[str, Any]] = []
-        operation = "UPSERT" if idempotent else "POST"
-
-        for result in results:
-            key = make_idempotency_key(result)
-            materialized_row = {**result, "idempotency_key": key}
-            for attempt in range(1, attempts + 1):
 
         for result in results:
             idempotency_key = make_idempotency_key(result)
@@ -603,11 +472,6 @@ def _(Any):
                     }
                 )
                 if idempotent:
-                    upsert_sink[key] = materialized_row.copy()
-                else:
-                    append_sink.append(materialized_row.copy())
-
-        materialized = list(upsert_sink.values()) if idempotent else append_sink
                     upsert_sink[idempotency_key] = materialized_row.copy()
                 else:
                     append_sink.append(materialized_row.copy())
@@ -625,8 +489,7 @@ def _(mo):
     mo.md(r"""
     ## 4. Efectos externos
 
-    `make_idempotency_key` y `simulate_sink_retries` implementan los siguientes
-    contratos.
+    Completá `make_idempotency_key` y `simulate_sink_retries`.
 
     En este ejercicio los sinks **no son servicios externos reales**. Son
     estructuras Python en memoria que representan dos contratos de escritura:
@@ -657,7 +520,8 @@ def _(mo):
     uv run pytest
     ```
 
-    La suite verifica estas garantías:
+    Al comienzo deben fallar con `NotImplementedError`. Implementá las
+    funciones hasta que estas garantías queden verdes:
 
     - [x] un duplicado no modifica el total;
     - [x] claves distintas no comparten estado;
