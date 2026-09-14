@@ -1,0 +1,42 @@
+name: Validación
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Instalar Python 3.12
+        run: uv python install 3.12
+
+      - name: Instalar dependencias
+        run: uv sync --frozen
+
+      - name: Ejecutar pruebas
+        run: uv run pytest -v
+
+      - name: Verificar estilo
+        run: uv run ruff check .
+
+      - name: Verificar notebook Marimo
+        run: uv run marimo check --strict notebook.py
+
+      - name: Verificar imagen Docker
+        run: docker build -t clase6-beam-tarea .
